@@ -24,65 +24,65 @@ const ROLL_NUMBER = "RA2311026010509";
  * Validates the node format X->Y
  * Returns { parent, child } if valid, null otherwise
  */
-function parseEdge(edgeStr) {
-    const trimmed = edgeStr.trim();
-    const regex = /^([A-Z])->([A-Z])$/;
-    const match = trimmed.match(regex);
-
-    if (!match) return null;
-
-    const [_, parent, child] = match;
-    if (parent === child) return null; // Self-loop treated as invalid
-
-    return { parent, child, original: trimmed };
+function validateAndExtractEdge(rawString) {
+    const cleanString = rawString.trim();
+    const nodePattern = /^([A-Z])->([A-Z])$/;
+    const capture = cleanString.match(nodePattern);
+    
+    if (!capture) return null;
+    
+    const [_, sourceNode, targetNode] = capture;
+    if (sourceNode === targetNode) return null; // Ignore self-loops
+    
+    return { from: sourceNode, to: targetNode, original: cleanString };
 }
 
 /**
  * Builds the nested tree structure recursively
  */
-function buildNestedTree(node, adj) {
-    const tree = {};
-    const children = adj[node] || [];
-
-    children.sort().forEach(child => {
-        tree[child] = buildNestedTree(child, adj);
+function generateHierarchyMap(currentNode, networkMap) {
+    const structure = {};
+    const descendants = networkMap[currentNode] || [];
+    
+    descendants.sort().forEach(childNode => {
+        structure[childNode] = generateHierarchyMap(childNode, networkMap);
     });
-
-    return tree;
+    
+    return structure;
 }
 
 /**
  * Calculates depth of a tree (max root-to-leaf path node count)
  */
-function getDepth(node, adj) {
-    const children = adj[node] || [];
-    if (children.length === 0) return 1;
-
-    let maxChildDepth = 0;
-    children.forEach(child => {
-        maxChildDepth = Math.max(maxChildDepth, getDepth(child, adj));
+function calculateVerticalDepth(activeNode, networkMap) {
+    const subNodes = networkMap[activeNode] || [];
+    if (subNodes.length === 0) return 1;
+    
+    let peakDepth = 0;
+    subNodes.forEach(child => {
+        peakDepth = Math.max(peakDepth, calculateVerticalDepth(child, networkMap));
     });
-
-    return 1 + maxChildDepth;
+    
+    return 1 + peakDepth;
 }
 
 /**
  * Checks for cycles using DFS
  */
-function hasCycleDFS(node, adj, visited, stack) {
-    visited.add(node);
-    stack.add(node);
-
-    const children = adj[node] || [];
-    for (const child of children) {
-        if (!visited.has(child)) {
-            if (hasCycleDFS(child, adj, visited, stack)) return true;
-        } else if (stack.has(child)) {
+function detectGraphCycles(node, networkMap, explored, activeStack) {
+    explored.add(node);
+    activeStack.add(node);
+    
+    const links = networkMap[node] || [];
+    for (const neighbor of links) {
+        if (!explored.has(neighbor)) {
+            if (detectGraphCycles(neighbor, networkMap, explored, activeStack)) return true;
+        } else if (activeStack.has(neighbor)) {
             return true;
         }
     }
-
-    stack.delete(node);
+    
+    activeStack.delete(node);
     return false;
 }
 
@@ -101,66 +101,60 @@ app.post('/bfhl', (req, res) => {
 
     // 1. Validation & Multi-parent/Duplicate filtering
     data.forEach(entry => {
-        const parsed = parseEdge(entry);
-        if (!parsed) {
+        const parsedNode = validateAndExtractEdge(entry);
+        if (!parsedNode) {
             invalid_entries.push(entry);
             return;
         }
 
-        const edgeKey = `${parsed.parent}->${parsed.child}`;
-        if (seen_edges.has(edgeKey)) {
-            if (!duplicate_edges.includes(edgeKey)) {
-                duplicate_edges.push(edgeKey);
+        const uniqueKey = `${parsedNode.from}->${parsedNode.to}`;
+        if (seen_edges.has(uniqueKey)) {
+            if (!duplicate_edges.includes(uniqueKey)) {
+                duplicate_edges.push(uniqueKey);
             }
             return;
         }
 
-        seen_edges.add(edgeKey);
+        seen_edges.add(uniqueKey);
 
-        // Multi-parent rule: first Encounter wins
-        if (children_with_parents.has(parsed.child)) {
-            // Silently discard subsequent parent edges
+        if (children_with_parents.has(parsedNode.to)) {
             return;
         }
 
-        children_with_parents.add(parsed.child);
-        valid_edges.push(parsed);
+        children_with_parents.add(parsedNode.to);
+        valid_edges.push(parsedNode);
     });
 
-    // 2. Build adjacency list and find all unique nodes
-    const adj = {};
-    const allNodes = new Set();
-    const childOf = {}; // node -> parent
+    const networkMap = {};
+    const graphNodeCollection = new Set();
+    const nodeParentTracker = {};
 
     valid_edges.forEach(edge => {
-        if (!adj[edge.parent]) adj[edge.parent] = [];
-        adj[edge.parent].push(edge.child);
-        childOf[edge.child] = edge.parent;
-        allNodes.add(edge.parent);
-        allNodes.add(edge.child);
+        if (!networkMap[edge.from]) networkMap[edge.from] = [];
+        networkMap[edge.from].push(edge.to);
+        nodeParentTracker[edge.to] = edge.from;
+        graphNodeCollection.add(edge.from);
+        graphNodeCollection.add(edge.to);
     });
 
-    // 3. Group into components (disjoint sets)
-    const parentMap = {};
-    function find(i) {
-        if (!parentMap[i]) parentMap[i] = i;
-        if (parentMap[i] === i) return i;
-        return find(parentMap[i]);
+    const dsuParent = {};
+    function locateRoot(i) {
+        if (!dsuParent[i]) dsuParent[i] = i;
+        return dsuParent[i] === i ? i : (dsuParent[i] = locateRoot(dsuParent[i]));
     }
-    function union(i, j) {
-        const rootI = find(i);
-        const rootJ = find(j);
-        if (rootI !== rootJ) parentMap[rootI] = rootJ;
-    }
+    
+    graphNodeCollection.forEach(node => dsuParent[node] = node);
+    valid_edges.forEach(edge => {
+        const rootA = locateRoot(edge.from);
+        const rootB = locateRoot(edge.to);
+        if (rootA !== rootB) dsuParent[rootA] = rootB;
+    });
 
-    allNodes.forEach(node => parentMap[node] = node);
-    valid_edges.forEach(edge => union(edge.parent, edge.child));
-
-    const components = {};
-    allNodes.forEach(node => {
-        const root = find(node);
-        if (!components[root]) components[root] = [];
-        components[root].push(node);
+    const disconnectedGroups = {};
+    graphNodeCollection.forEach(node => {
+        const groupKey = locateRoot(node);
+        if (!disconnectedGroups[groupKey]) disconnectedGroups[groupKey] = [];
+        disconnectedGroups[groupKey].push(node);
     });
 
     // 4. Process each component
@@ -170,55 +164,49 @@ app.post('/bfhl', (req, res) => {
     let max_depth = -1;
     let largest_tree_root = "";
 
-    Object.values(components).forEach(compNodes => {
-        // Find roots in this component
-        const roots = compNodes.filter(node => !childOf[node]).sort();
+    Object.values(disconnectedGroups).forEach(groupNodes => {
+        const availableRoots = groupNodes.filter(node => !nodeParentTracker[node]).sort();
+        
+        let selectedRoot;
+        let forceCycleMode = false;
 
-        let root;
-        let is_pure_cycle = false;
-
-        if (roots.length > 0) {
-            // If multiple roots exist in one component (shouldn't happen with multi-parent rule, 
-            // but just in case of disconnected nodes which would be separate components anyway)
-            root = roots[0];
+        if (availableRoots.length > 0) {
+            selectedRoot = availableRoots[0];
         } else {
-            // Pure cycle: lexicographically smallest
-            root = compNodes.sort()[0];
-            is_pure_cycle = true;
+            selectedRoot = groupNodes.sort()[0];
+            forceCycleMode = true;
         }
 
-        // Cycle detection
-        const visited = new Set();
-        const stack = new Set();
-        const has_cycle = is_pure_cycle || hasCycleDFS(root, adj, visited, stack);
+        const exploredSet = new Set();
+        const recursionStack = new Set();
+        const containsCycle = forceCycleMode || detectGraphCycles(selectedRoot, networkMap, exploredSet, recursionStack);
 
-        const hierarchy = { root };
+        const groupResult = { root: selectedRoot };
 
-        if (has_cycle) {
-            hierarchy.tree = {};
-            hierarchy.has_cycle = true;
+        if (containsCycle) {
+            groupResult.tree = {};
+            groupResult.has_cycle = true;
             total_cycles++;
         } else {
-            const tree = {};
-            tree[root] = buildNestedTree(root, adj);
-            hierarchy.tree = tree;
-
-            const depth = getDepth(root, adj);
-            hierarchy.depth = depth;
+            const nestedTreeStructure = {};
+            nestedTreeStructure[selectedRoot] = generateHierarchyMap(selectedRoot, networkMap);
+            groupResult.tree = nestedTreeStructure;
+            
+            const groupDepth = calculateVerticalDepth(selectedRoot, networkMap);
+            groupResult.depth = groupDepth;
             total_trees++;
 
-            // Track largest tree
-            if (depth > max_depth) {
-                max_depth = depth;
-                largest_tree_root = root;
-            } else if (depth === max_depth) {
-                if (!largest_tree_root || root < largest_tree_root) {
-                    largest_tree_root = root;
+            if (groupDepth > max_depth) {
+                max_depth = groupDepth;
+                largest_tree_root = selectedRoot;
+            } else if (groupDepth === max_depth) {
+                if (!largest_tree_root || selectedRoot < largest_tree_root) {
+                    largest_tree_root = selectedRoot;
                 }
             }
         }
 
-        hierarchies.push(hierarchy);
+        hierarchies.push(groupResult);
     });
 
     // Sort hierarchies by root lexicographically

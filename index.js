@@ -8,11 +8,16 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Request logging for debugging
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+});
 
 // Identity Configuration
-const USER_ID = "gagan_1849";
-const EMAIL_ID = "gs5318@srmist.edu.in";
+const USER_ID = "Gagan8340";
+const EMAIL_ID = "sanagalagagan@gmail.com";
 const ROLL_NUMBER = "RA2311026010509";
 
 /**
@@ -232,6 +237,13 @@ app.post('/bfhl', (req, res) => {
             largest_tree_root: largest_tree_root || null
         }
     });
+});
+
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Fallback to serve index.html for any GET requests
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.listen(PORT, () => {
